@@ -196,13 +196,17 @@ Stop the server before restoring, same as before.
   than Oodle — there is no open Oodle *compressor*. A 1.3 MB save becomes about 1.6 MB.
   Palworld reads it fine, and the next time the game saves the world it writes Oodle
   again and the size drops back. This is the same approach every current save tool uses.
-- **Harmless warnings.** Loading a save prints things like `Struct type for ... not
-  found`, `Unknown EPalWorkTransformType`, `Failed to parse weapon data, continuing as
-  raw data`, and `failed to decode group ..., keeping raw bytes`. Those are the
-  underlying library falling back to preserving bytes verbatim for structures it does
-  not fully model — note "keeping raw bytes" and "continuing as raw data". They are not
-  errors and not data loss. The guild chest fields this tool reads and writes are fully
-  decoded, and every `resize` verifies them by re-reading the file it wrote.
+- **Newer save fields.** The pinned library does not understand `SetProperty`, used
+  by fields such as `worldSaveData.InLockerCharacterInstanceIDArray`. The editor
+  preserves sets and unrelated world properties as their original bytes. It only
+  decodes the guild storage map and item containers, without using the library's
+  version-dependent custom `RawData` decoders. A `Struct type for ... not found`
+  message can still appear when a type hint is absent.
+- **Compatibility checks.** Every load must reproduce the decompressed input
+  byte for byte. Before writing, restoring only the original guild chest capacities
+  must reproduce that same input; any other change is rejected before the output
+  file is opened. Unknown property framing is rejected rather than guessed. A
+  compatibility error means this save needs further support; do not bypass the check.
 - **Don't install this inside `steamapps`.** Steam's "Verify integrity of game files"
   can delete anything it finds under `steamapps/common`.
 - **Version pinning.** `patches/` is derived from `palworld-save-tools` 0.24.0
@@ -225,12 +229,15 @@ For anyone who wants to verify the approach rather than trust it:
   `int32 index, int32 stack count, length-prefixed item id`.
 
 Because capacity and stored slots are decoupled, resizing is one integer and no item
-data is touched.
+data is touched. `save_compat.py` supplies tool-specific reader/writer subclasses;
+it does not change the installed library's global behavior. Unrelated top-level
+world fields retain their type metadata and payload bytes, including data that the
+old library cannot interpret.
 
 ## Development
 
-The chest logic is pure functions over save-shaped dictionaries, so the tests need no
-save file, no network and no libooz:
+Tests use synthetic save-shaped dictionaries and binary zlib saves. They need no
+private save files, network access, or native libooz:
 
 ```powershell
 .\venv\Scripts\python.exe -m unittest discover -p "test_*.py" -v
@@ -239,7 +246,10 @@ save file, no network and no libooz:
 The same command runs in CI on Linux and Windows across Python 3.9 and 3.12. Coverage
 includes the multi-guild and `--container` paths, the shrink guard and its exact
 boundary, guilds with no chest built, saves with no guilds at all, and the FGuid and
-slot decoders against a known vector from a real save.
+slot decoders against a known vector from a real save. Binary regression tests
+cover opaque sets and property headers, malformed input, exact read/write
+round trips, a 54-to-358 resize, and rejection of unrelated changes without
+creating or truncating the output file.
 
 ### Verification done on this approach
 

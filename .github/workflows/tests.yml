@@ -22,8 +22,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # The unit tests only exercise pure logic over save-shaped dicts, so libooz is
-      # not needed here -- it is only used to decompress an actual save file.
+      # Tests use synthetic dictionaries and zlib saves; native libooz is not needed.
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 

@@ -34,26 +34,15 @@ import argparse  # noqa: E402
 import struct  # noqa: E402
 
 try:
-    from palworld_save_tools.gvas import GvasFile
     from palworld_save_tools.palsav import compress_gvas_to_sav, decompress_sav_to_gvas
-    from palworld_save_tools.paltypes import (
-        DISABLED_PROPERTIES,
-        PALWORLD_CUSTOM_PROPERTIES,
-        PALWORLD_TYPE_HINTS,
-    )
+    from palworld_save_tools.paltypes import PALWORLD_TYPE_HINTS
+    from save_compat import SaveCompatibilityError, read_gvas, write_gvas
 except ImportError:
     sys.exit(
         "palworld_save_tools is not installed.\n"
         "Run setup.ps1 (Windows) or setup.sh (Linux/macOS) first, and make sure you are\n"
         "using the Python from the created venv."
     )
-
-# palworld-save-tools' own convert command reads with the custom properties minus
-# DISABLED_PROPERTIES but writes with the full set. The lossless round trip was
-# measured against exactly that asymmetry, so it is deliberate here.
-READ_CUSTOM_PROPERTIES = {
-    k: v for k, v in PALWORLD_CUSTOM_PROPERTIES.items() if k not in DISABLED_PROPERTIES
-}
 
 SERVER_PROCESS_NAMES = (
     "PalServer-Win64-Shipping",
@@ -96,7 +85,14 @@ def load_save(path):
                 "Run the setup script, or set PALWORLD_OOZ_DLL_PATH to your libooz build."
             )
         sys.exit(f"Failed to decompress {path}: {exc}")
-    gvas = GvasFile.read(raw_gvas, PALWORLD_TYPE_HINTS, READ_CUSTOM_PROPERTIES)
+    gvas = read_gvas(raw_gvas, PALWORLD_TYPE_HINTS)
+    gvas._original_raw = raw_gvas
+    wsd = gvas.properties["worldSaveData"]["value"]
+    containers = containers_by_id(wsd)
+    gvas._original_chest_slots = [
+        (containers[cid]["SlotNum"], containers[cid]["SlotNum"]["value"])
+        for cid in set(guild_storage_container_ids(wsd).values()) if cid in containers
+    ]
     return gvas, save_type, magic
 
 
@@ -112,8 +108,24 @@ def write_save(gvas, path):
         )
         else 0x31
     )
+    edited_raw = write_gvas(gvas)
+    # Restoring only the allowed capacities must reproduce the entire input.
+    # Check before opening the output, so even an existing file stays intact.
+    originals = gvas._original_chest_slots
+    edited_values = [prop["value"] for prop, old in originals]
+    try:
+        for prop, old in originals:
+            prop["value"] = old
+        if write_gvas(gvas) != gvas._original_raw:
+            raise SaveCompatibilityError(
+                "Unexpected non-capacity change; refusing to write save"
+            )
+    finally:
+        for (prop, old), edited in zip(originals, edited_values):
+            prop["value"] = edited
+    encoded = compress_gvas_to_sav(edited_raw, save_type)
     with open(path, "wb") as f:
-        f.write(compress_gvas_to_sav(gvas.write(PALWORLD_CUSTOM_PROPERTIES), save_type))
+        f.write(encoded)
 
 
 # ------------------------------------------------------------------- guild chest data
